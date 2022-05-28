@@ -1,10 +1,11 @@
-/**
- * name: failed-payments.exe
+/********************************************************************************************************************
+ * name: fp
  * description: read csv, insert into sqlite3, find payments with more than x payment requests, export result to csv
  * author: Tobias Klemmer <tobias@klemmer.info>
- * date: 2022-05-26
+ * date: 2022-05-28
+ * version: 2
  * state: quick and dirty prototype
-**/
+ ********************************************************************************************************************/
 package main
 
 import (
@@ -18,36 +19,47 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
 	var dbName string
 	var csvNameFrom string
-	var csvNameTo string
-	var minPaymentRequests int
+	var csvNameToWarn string
+	var csvNameToSuspend string
+	var paymentRequestsToWarn int
+	var minPaymentRequestsToSuspend int
+	var timestamp = time.Now().Format("2006-01-02")
+	var defaultSourceFileName    = "failed-payment-requests-" + timestamp + ".csv"
+	var defaultToWarnFileName    = "customers-to-warn-"       + timestamp + ".csv"
+	var defaultToSuspendFileName = "customers-to-suspend-"    + timestamp + ".csv"
 
 	fmt.Println(" ")
-	fmt.Println("****************************************************")
+	fmt.Println("***********************************************************")
 	fmt.Println("PROCESSING PAYMENT REQUESTS -- started")
-	fmt.Println("****************************************************")
+	fmt.Println("***********************************************************")
 	
 	// get command-line parameters or use defaults
-	flag.StringVar(&dbName, "db", "failedPayments.sqlite3", "Sqlite database to import to")
-	flag.StringVar(&csvNameFrom, "from", "failed-payments.csv", "CSV file to import from")
-	flag.StringVar(&csvNameTo, "to", "customersToSuspend.csv", "CSV file to export result to")
-	flag.IntVar(&minPaymentRequests, "requests", 3, "minimum payment requests - for exporting")
+	flag.StringVar(&dbName, "db", "failed-payment-requests-database.sqlite3", "Sqlite database to import to")
+	flag.StringVar(&csvNameFrom, "from", defaultSourceFileName, "CSV file to import from")
+	flag.StringVar(&csvNameToWarn, "warn", defaultToWarnFileName, "CSV file to export result to")
+	flag.StringVar(&csvNameToSuspend, "to", defaultToSuspendFileName, "CSV file to export result to")
+	flag.IntVar(&paymentRequestsToWarn, "count-warn", 3, "payment requests to warn - for exporting")
+	flag.IntVar(&minPaymentRequestsToSuspend, "count-suspend", 4, "minimum payment requests  to suspend- for exporting")
 	flag.Parse()
 	
-	if dbName == "" || csvNameFrom == "" || csvNameTo == "" {
+	if dbName == "" || csvNameFrom == ""|| csvNameToWarn == "" || csvNameToSuspend == "" {
 		flag.PrintDefaults()
 	}
 	
-	fmt.Println("Received      Database Name:", dbName)
-	fmt.Println("Received CSV-From-File Name:", csvNameFrom)
-	fmt.Println("Received CSV-To-File   Name:", csvNameTo)
-	fmt.Println("Minimum Payment Requests   :", minPaymentRequests)
-	fmt.Println("****************************************************")
+	fmt.Println("Received      Database Name      :", dbName)
+	fmt.Println("Received CSV-From-File Name      :", csvNameFrom)
+	fmt.Println("Received CSV-To-Warn-File Name   :", csvNameToWarn)
+	fmt.Println("Received CSV-To-Suspend File Name:", csvNameToSuspend)
+	fmt.Println("Minimum Payment Requests Warn    :", paymentRequestsToWarn)
+	fmt.Println("Minimum Payment Requests Suspend :", minPaymentRequestsToSuspend)
+	fmt.Println("***********************************************************")
 
 	// Create or Open Sqlite3 database with name of provided parameter 
 	db, err := sql.Open("sqlite3", dbName)
@@ -55,6 +67,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+
 	err = db.Ping()
 	if err != nil {
 		log.Fatalf("Cannot connect to database: %s", err)
@@ -94,6 +107,48 @@ func main() {
 	_, err = stmt.Exec()
 	if err != nil {
 		log.Fatalf("SQL Statement execution failed: %s", err)
+	}
+
+	// Create or Open paymentsWarnings table within Database
+	SQLCreateTableWarnings := `
+	  CREATE TABLE IF NOT EXISTS paymentsWarnings (
+		payments_id               text primary key,
+		timestamp                 text,
+		payment_requests_count    integer,
+		customers_id              text,
+		customers_given_name      text,
+		customers_family_name     text,
+		customers_metadata_leadID text
+	)`
+
+	stmt, err = db.Prepare(SQLCreateTableWarnings)
+	if err != nil {
+		log.Fatalf("SQL Statement prepare failed for table paymentsWarnings: %s", err)
+	}
+	_, err = stmt.Exec()
+	if err != nil {
+		log.Fatalf("SQL Statement execution failed for table paymentsWarnings: %s", err)
+	}
+
+	// Create or Open paymentsSuspended table within Database
+	SQLCreateTableSuspended := `
+	  CREATE TABLE IF NOT EXISTS paymentsSuspended (
+		payments_id               text primary key,
+		timestamp                 text,
+		payment_requests_count    integer,
+		customers_id              text,
+		customers_given_name      text,
+		customers_family_name     text,
+		customers_metadata_leadID text
+	)`
+
+	stmt, err = db.Prepare(SQLCreateTableSuspended)
+	if err != nil {
+		log.Fatalf("SQL Statement prepare failed for table paymentsSuspended: %s", err)
+	}
+	_, err = stmt.Exec()
+	if err != nil {
+		log.Fatalf("SQL Statement execution failed for table paymentsSuspended: %s", err)
 	}
 
 	// Create Index idx_payments_id
@@ -139,6 +194,36 @@ func main() {
 	_, err = stmt.Exec()
 	if err != nil {
 		log.Fatalf("SQL Statement execution failed for index on customers_family_name: %s", err)
+	}
+	
+	// Create Index idx_customers_family_name
+	SQLCreateDBIndexOnPaymentsWarningTimestamp := `
+       CREATE INDEX IF NOT EXISTS idx_payments_warning_timestamp 
+	   ON paymentsWarnings(timestamp)
+	`
+
+	stmt, err = db.Prepare(SQLCreateDBIndexOnPaymentsWarningTimestamp)
+	if err != nil {
+		log.Fatalf("SQL Statement prepare failed for index on paymentsWarning timestamp: %s", err)
+	}
+	_, err = stmt.Exec()
+	if err != nil {
+		log.Fatalf("SQL Statement execution failed for index on paymentsWarning timestamp: %s", err)
+	}
+
+	// Create Index idx_customers_family_name
+	SQLCreateDBIndexOnPaymentsSuspendedTimestamp := `
+       CREATE INDEX IF NOT EXISTS idx_payments_suspended_timestamp 
+	   ON paymentsSuspended(timestamp)
+	`
+
+	stmt, err = db.Prepare(SQLCreateDBIndexOnPaymentsSuspendedTimestamp)
+	if err != nil {
+		log.Fatalf("SQL Statement prepare failed for index on paymentsSuspended timestamp: %s", err)
+	}
+	_, err = stmt.Exec()
+	if err != nil {
+		log.Fatalf("SQL Statement execution failed for index on paymentsSuspended timestamp: %s", err)
 	}
 
 	// Open CSV File
@@ -267,58 +352,90 @@ func main() {
 		}
 	}
 
-	fmt.Println("****************************************************")
+	fmt.Println("***********************************************************")
 	fmt.Println("PROCESSING PAYMENT REQUESTS --   ended")
-	fmt.Println("****************************************************")
-	fmt.Println(fmt.Sprintf("FIND PAYMENTS WITH MORE THAN %s REQUESTS --   started", strconv.Itoa(minPaymentRequests)))
-	fmt.Println("****************************************************")
+	fmt.Println("***********************************************************")
+	fmt.Println(" ")
+	fmt.Println("***********************************************************")
+	fmt.Println(fmt.Sprintf("FIND PAYMENTS WITH MORE THAN %s REQUESTS --   started", strconv.Itoa(paymentRequestsToWarn)))
+	fmt.Println("***********************************************************")
+	// avoiding database is locked error by setting up a transaction
+    // https://github.com/mattn/go-sqlite3/issues/569
+	tx, err := db.Begin()
 
-	// write export file
-	targetFile, err := os.OpenFile(csvNameTo, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+    // prepare insert record
+	SQLInsertTablePaymentsWarning := `
+		INSERT INTO paymentsWarnings(
+			payments_id               ,
+			timestamp                 ,
+			payment_requests_count    ,
+			customers_id              ,
+			customers_given_name      ,
+			customers_family_name     ,
+			customers_metadata_leadID 
+		) values(?, ?, ?, ?, ?, ?, ?)
+	`
+	stmtInsertWarnings, err := tx.Prepare(SQLInsertTablePaymentsWarning)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Prepare SQL statement for insert into table paymentsWarnings failed: %s", err)
 	}
-	defer targetFile.Close()
+
+	// prepare upsert record
+	SQLInsertTablePaymentsSuspended := `
+		INSERT INTO paymentsSuspended(
+			payments_id               ,
+			timestamp                 ,
+			payment_requests_count    ,
+			customers_id              ,
+			customers_given_name      ,
+			customers_family_name     ,
+			customers_metadata_leadID 
+		) values(?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(payments_id) 
+		DO UPDATE SET
+			timestamp                         = excluded.timestamp,
+			payment_requests_count            = excluded.payment_requests_count
+		WHERE excluded.payment_requests_count > paymentsSuspended.payment_requests_count
+	`
+	stmtInsertSuspended, err := tx.Prepare(SQLInsertTablePaymentsSuspended)
+	if err != nil {
+		log.Fatalf("Prepare SQL statement for insert into table paymentsSuspended failed: %s", err)
+	}
 
 	SQLQuery := fmt.Sprintf(`
-SELECT 
-    resource_type             ,
-    action                    ,
-    details_origin            ,
-    details_cause             ,
-    details_description       ,
-    details_scheme            ,
-    details_reason_code       ,
-    links_parent_event        ,
-    links_payment             ,
-    payments_id               ,
-    payments_created_at       ,
-    payments_charge_date      ,
-    payments_amount           ,
-    payments_description      ,
-    payments_currency         ,
-    payments_status           ,
-    customers_id              ,
-    customers_given_name      ,
-    customers_family_name     ,
-    customers_metadata_leadID ,
-    COUNT(payments_id) 
-  FROM failedPaymentRequests 
-  GROUP BY payments_id 
-  HAVING count(payments_id) > %s 
-  ORDER BY payments_id
-`, strconv.Itoa(minPaymentRequests))
+		SELECT 
+			resource_type             ,
+			action                    ,
+			details_origin            ,
+			details_cause             ,
+			details_description       ,
+			details_scheme            ,
+			details_reason_code       ,
+			links_parent_event        ,
+			links_payment             ,
+			payments_id               ,
+			payments_created_at       ,
+			payments_charge_date      ,
+			payments_amount           ,
+			payments_description      ,
+			payments_currency         ,
+			payments_status           ,
+			customers_id              ,
+			customers_given_name      ,
+			customers_family_name     ,
+			customers_metadata_leadID ,
+			COUNT(payments_id) 
+		FROM failedPaymentRequests 
+		GROUP BY payments_id 
+		HAVING count(payments_id) >= %s 
+		ORDER BY payments_id
+	`, strconv.Itoa(paymentRequestsToWarn))
 
-	row, err := db.Query(SQLQuery)
+	row, err := tx.Query(SQLQuery)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer row.Close()
-
-	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payment_requests_counted\n"
-	if _, err = targetFile.WriteString(headerText); err != nil {
-		panic(err)
-	}
 
 	for row.Next() {
 		var resource_type string
@@ -341,9 +458,142 @@ SELECT
 		var customers_given_name string
 		var customers_family_name string
 		var customers_metadata_leadID string
-		var payment_requests_counted string
+		var payment_requests_count string
 
-		row.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payment_requests_counted)
+		row.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payment_requests_count)
+
+		// create record into paymentsWarnings
+		if payment_requests_count == strconv.Itoa(paymentRequestsToWarn) {
+			_, err = stmtInsertWarnings.Exec(
+				payments_id               ,
+				timestamp                 ,
+				payment_requests_count    ,
+				customers_id              ,
+				customers_given_name      ,
+				customers_family_name     ,
+				customers_metadata_leadID )
+			if err != nil {
+				if strings.Contains(fmt.Sprint(err), "UNIQUE constraint failed") {
+					fmt.Println("SUCCESS: Skipped existing warning for payments_id                :", payments_id)
+				} else {
+					fmt.Println("ERROR:   Insert into table paymentWarnings failed for payments_id:", payments_id, err)
+				}
+			} else {
+					fmt.Println("SUCCESS: Inserted new warning for payments_id                    :", payments_id)
+			}
+		} 
+
+		// create record into paymentsSuspended
+		if payment_requests_count >= strconv.Itoa(minPaymentRequestsToSuspend) {
+			_, err = stmtInsertSuspended.Exec(
+				payments_id               ,
+				timestamp                 ,
+				payment_requests_count    ,
+				customers_id              ,
+				customers_given_name      ,
+				customers_family_name     ,
+				customers_metadata_leadID )
+			if err != nil {
+				if strings.Contains(fmt.Sprint(err), "UNIQUE constraint failed") {
+
+					fmt.Println("SUCCESS: Skipped existing suspend for payments_id                 :", payments_id)
+				} else {
+					fmt.Println("ERROR:   Insert into table paymentSuspended failed for payments_id:", payments_id, err)
+				}
+			} else {
+					fmt.Println("SUCCESS: Inserted new suspend for payments_id                     :", payments_id)
+			}
+		}
+	}
+	err = row.Err()
+	tx.Commit()
+	row.Close()
+
+	fmt.Println("***********************************************************")
+	fmt.Println(fmt.Sprintf("FIND PAYMENTS WITH MORE THAN %s REQUESTS --   ended", strconv.Itoa(paymentRequestsToWarn)))
+	fmt.Println("***********************************************************")
+	fmt.Println(" ")
+
+	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payment_requests_counted\n"
+	
+
+	fmt.Println("***********************************************************")
+	fmt.Println(fmt.Sprintf("CREATE customers-to-warn file WITH %s REQUESTS --   started", strconv.Itoa(paymentRequestsToWarn)))
+	fmt.Println("***********************************************************")
+	fmt.Println(" ")
+
+	// write export file to customers-to-warn-YYYY-MM-DD.csv
+	targetFileWarn, err := os.OpenFile(csvNameToWarn, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer targetFileWarn.Close()
+
+	if _, err = targetFileWarn.WriteString(headerText); err != nil {
+		panic(err)
+	}
+
+	SQLQueryExportWarnings := fmt.Sprintf(`
+		SELECT 
+			failedPaymentRequests.resource_type              ,
+			failedPaymentRequests.action                     ,
+			failedPaymentRequests.details_origin             ,
+			failedPaymentRequests.details_cause              ,
+			failedPaymentRequests.details_description        ,
+			failedPaymentRequests.details_scheme             ,
+			failedPaymentRequests.details_reason_code        ,
+			failedPaymentRequests.links_parent_event         ,
+			failedPaymentRequests.links_payment              ,
+			failedPaymentRequests.payments_id                ,
+			failedPaymentRequests.payments_created_at        ,
+			failedPaymentRequests.payments_charge_date       ,
+			failedPaymentRequests.payments_amount            ,
+			failedPaymentRequests.payments_description       ,
+			failedPaymentRequests.payments_currency          ,
+			failedPaymentRequests.payments_status            ,
+			failedPaymentRequests.customers_id               ,
+			failedPaymentRequests.customers_given_name       ,
+			failedPaymentRequests.customers_family_name      ,
+			failedPaymentRequests.customers_metadata_leadID  ,
+			COUNT(paymentsWarnings.payments_id) 
+		FROM paymentsWarnings
+		INNER JOIN failedPaymentRequests 
+		ON failedPaymentRequests.payments_id = paymentsWarnings.payments_id 
+		WHERE paymentsWarnings.timestamp = "%s"
+		GROUP BY   paymentsWarnings.payments_id 
+		ORDER BY   paymentsWarnings.payments_id
+	`, timestamp)
+
+	rowWarnings, err := db.Query(SQLQueryExportWarnings)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rowWarnings.Close()
+
+	for rowWarnings.Next() {
+		var resource_type string
+		var action string
+		var details_origin string
+		var details_cause string
+		var details_description string
+		var details_scheme string
+		var details_reason_code string
+		var links_parent_event string
+		var links_payment string
+		var payments_id string
+		var payments_created_at string
+		var payments_charge_date string
+		var payments_amount string
+		var payments_description string
+		var payments_currency string
+		var payments_status string
+		var customers_id string
+		var customers_given_name string
+		var customers_family_name string
+		var customers_metadata_leadID string
+		var payment_requests_count string
+
+		rowWarnings.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payment_requests_count)
 
 		resultText := 	"\"" + resource_type + "\"," +
 						"\"" + action + "\"," + 
@@ -365,17 +615,136 @@ SELECT
 						"\"" + customers_given_name + "\"," + 
 						"\"" + customers_family_name + "\"," + 
 						"\"" + customers_metadata_leadID + "\"," + 
-						       payment_requests_counted + "\n"
+						payment_requests_count + "\n"
 
-		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_counted, csvNameTo))
+		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToWarn))
 		
-		if _, err = targetFile.WriteString(resultText); err != nil {
+		if _, err = targetFileWarn.WriteString(resultText); err != nil {
 			panic(err)
 		}
 	}
 
-	fmt.Println("****************************************************")
-	fmt.Println(fmt.Sprintf("FIND PAYMENTS WITH MORE THAN %s REQUESTS --   ended", strconv.Itoa(minPaymentRequests)))
-	fmt.Println("****************************************************")
+	 rowWarnings.Close()
+
+	fmt.Println("***********************************************************")
+	fmt.Println(fmt.Sprintf("CREATE customers-to-warn file WITH %s REQUESTS --      ended", strconv.Itoa(paymentRequestsToWarn)))
+	fmt.Println("***********************************************************")
 	fmt.Println(" ")
+
+	fmt.Println("***********************************************************")
+	fmt.Println(fmt.Sprintf("CREATE customers-to-suspend file WITH %s REQUESTS -- started", strconv.Itoa(minPaymentRequestsToSuspend)))
+	fmt.Println("***********************************************************")
+	fmt.Println(" ")
+
+	// write export file to customers-to-suspend-YYYY-MM-DD.csv
+	targetFileSuspend, err := os.OpenFile(csvNameToSuspend, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer targetFileSuspend.Close()
+
+	if _, err = targetFileSuspend.WriteString(headerText); err != nil {
+		panic(err)
+	}
+
+	SQLQueryExportSuspended := fmt.Sprintf(`
+		SELECT 
+			failedPaymentRequests.resource_type              ,
+			failedPaymentRequests.action                     ,
+			failedPaymentRequests.details_origin             ,
+			failedPaymentRequests.details_cause              ,
+			failedPaymentRequests.details_description        ,
+			failedPaymentRequests.details_scheme             ,
+			failedPaymentRequests.details_reason_code        ,
+			failedPaymentRequests.links_parent_event         ,
+			failedPaymentRequests.links_payment              ,
+			failedPaymentRequests.payments_id                ,
+			failedPaymentRequests.payments_created_at        ,
+			failedPaymentRequests.payments_charge_date       ,
+			failedPaymentRequests.payments_amount            ,
+			failedPaymentRequests.payments_description       ,
+			failedPaymentRequests.payments_currency          ,
+			failedPaymentRequests.payments_status            ,
+			failedPaymentRequests.customers_id               ,
+			failedPaymentRequests.customers_given_name       ,
+			failedPaymentRequests.customers_family_name      ,
+			failedPaymentRequests.customers_metadata_leadID  ,
+			COUNT(failedPaymentRequests.payments_id) 
+		FROM       paymentsSuspended
+		INNER JOIN failedPaymentRequests 
+		ON         failedPaymentRequests.payments_id = paymentsSuspended.payments_id
+		WHERE      paymentsSuspended.timestamp = "%s"
+		GROUP BY   failedPaymentRequests.payments_id 
+		ORDER BY   failedPaymentRequests.payments_id
+	`, timestamp)
+
+	rowSuspended, err := db.Query(SQLQueryExportSuspended)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rowSuspended.Close()
+
+	for rowSuspended.Next() {
+		var resource_type string
+		var action string
+		var details_origin string
+		var details_cause string
+		var details_description string
+		var details_scheme string
+		var details_reason_code string
+		var links_parent_event string
+		var links_payment string
+		var payments_id string
+		var payments_created_at string
+		var payments_charge_date string
+		var payments_amount string
+		var payments_description string
+		var payments_currency string
+		var payments_status string
+		var customers_id string
+		var customers_given_name string
+		var customers_family_name string
+		var customers_metadata_leadID string
+		var payment_requests_count string
+
+		rowSuspended.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payment_requests_count)
+
+		resultText := 	"\"" + resource_type + "\"," +
+						"\"" + action + "\"," + 
+						"\"" + details_origin + "\"," + 
+						"\"" + details_cause + "\"," + 
+						"\"" + details_description + "\"," + 
+						"\"" + details_scheme + "\"," + 
+						"\"" + details_reason_code + "\"," + 
+						"\"" + links_parent_event + "\"," + 
+						"\"" + links_payment + "\"," + 
+						"\"" + payments_id + "\"," + 
+						"\"" + payments_created_at + "\"," + 
+						"\"" + payments_charge_date + "\"," + 
+						       payments_amount + "," + 
+						"\"" + payments_description + "\"," + 
+						"\"" + payments_currency + "\"," + 
+						"\"" + payments_status + "\"," + 
+						"\"" + customers_id + "\"," + 
+						"\"" + customers_given_name + "\"," + 
+						"\"" + customers_family_name + "\"," + 
+						"\"" + customers_metadata_leadID + "\"," + 
+						payment_requests_count + "\n"
+
+		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspend))
+		
+		if _, err = targetFileSuspend.WriteString(resultText); err != nil {
+			panic(err)
+		}
+	}
+
+	rowSuspended.Close()
+
+	fmt.Println("***********************************************************")
+	fmt.Println(fmt.Sprintf("CREATE customers-to-suspend file WITH %s REQUESTS -- ended", strconv.Itoa(minPaymentRequestsToSuspend)))
+	fmt.Println("***********************************************************")
+	fmt.Println(" ")
+	fmt.Println("***********************************************************")
+	fmt.Println(" F I N I S H E D")
+	fmt.Println("***********************************************************")
 }

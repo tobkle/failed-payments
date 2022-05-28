@@ -1,4 +1,4 @@
-module github.com/tobkle/failed-payments.exe
+module github.com/tobkle/fp
 
 go 1.18
 

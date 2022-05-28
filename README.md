@@ -1,39 +1,93 @@
-# Failed Payments Processing
+# Failed Payment Requests Processing
+
+You have downloaded a file with failed payment requests from your payment provider. In those files you have all executed requests to customers to pay a transaction of a specific amount. These requests weren't successful. Now, you want to decide, whether you want to ignore, to warn or to suspend customers due to a number of unsuccessful payment requests. This programm helps you to get a list of customers and their payments who should get warned, and who should get suspended.
+
+## Download Executable
+
+Click on fp and download the executable
+Create a folder to host this executable (and all other files later)
+
+## Solve Security Topic "Unverified Developer"
+
+You can bypass the block in your Security & Privacy settings manually:
+
+1. Open the Apple menu, and click System Preferences.
+2. Click Security & Privacy.
+3. Click the General tab.
+4. Click the lock in the lower right corner of the window.
+5. Enter your username and password when prompted, and click Unlock.
+6. Click the App Store and Identified Developers radial button.
+7. Look for “fp was blocked from opening because it is not from an identified developer” and click Open Anyway. (In older versions of macOS, you could click Anywhere and then click Allow From Anywhere.)
+8. Try rerunning the app.
 
 ## Usage
 
-```bash
-./failed-payments.exe -db failedPayments.sqlite3 -from failed-payments.csv -to customersToSuspend.csv -requests 3
-```
-
-or if the database and the files keep their names, the above values are the default values. If you are fine with the default values, you might start the program just like so:
+Just run...
 
 ```bash
-./failed-payments.exe
+./fp
 ```
 
-or just provide any of the above parameters to overwrite the defaults for that run.
+This will use the default values:
+
+```
+Parameter:      Default value:
+- db            = failed-payment-requests-database.sqlite3
+- from          = failed-payment-requests-YYYY-MM-DD.csv   with today's date: YYYY=year, MM=month, DD=day)
+- to            = customers-to-suspend-YYYY-MM-DD.csv      with today's date: YYYY=year, MM=month, DD=day)
+- warn          = customers-to-warn-YYYY-MM-DD.csv         with today's date: YYYY=year, MM=month, DD=day)
+- count-warn    = 3                                        warn customers with 3 payment requests
+- count-suspend = 4                                        suspend customers with 4 or more payment requests
+```
+
+If you want to have more control, use the parameters and provide a value for a parameter such as the following example:
+
+```bash
+./fp -db failed-payment-requests-database.sqlite3 -from failed-payment-requests-2022-05-28.csv -to customers-to-suspend-2022-05-28.csv -warn customers-to-warn-2022-05-28.csv -count-warn 3 -count-suspend 4
+```
 
 ## What it does
 
 The above program does the following:
 
 - it reads payment request records from a `-from` file-name.csv, which you download from your payment provider
+- if this parameter isn't provided, it opens the csv file: failed-payments-YYYY-MM-DD.csv
 - it writes those records to a local `-db` dbname.sqlite3 database, and...
   - if the payment request id is already in the database, it skips that record, as it is already in the database, or...
   - if the payment request is not in the database, it inserts the record into the database.
 - after inserting all provided new records...
-- it checks the database for payments_id, which had more than `-requests` number of payment requests.
-- the found payments_id with more than the allowed number of payment requests are exported in a new `-to` customersToSuspend.csv file
-- if the customersToSuspend.csv file already exists, it will be overwritten with the new content
 
-## How to import customersToSuspend.csv into Excel
+### Payment Warnings
+
+- it checks the database for payments_id, which has `-count-warn` number of payment requests (default: 3)
+- if found, create a record in the table paymentsWarnings with
+  - payments_id as unique primary key
+  - timestamp with today's date as secondary index
+  - customers_id, customers_given_name, customers_family_name, customers_metadata_leadID
+- create a csv-file customers-to-warn-YYYY-MM-DD.csv containing all customer payments which got a warning record today
+
+### Customers To Suspend
+
+- it checks the database for payments_id, which had `-count-suspend` number or more of payment requests (default: 4)
+- if found, create a record in the table paymentsSuspended
+  - payments_id as unique primary key
+  - timestamp with today's date secondary index
+  - payment_requests_count
+  - customers_id, customers_given_name, customers_family_name, customers_metadata_leadID
+- if paymentsId already in the table paymentsSuspended, check if the the payment_requests_count has increased,
+  - if it is increased, update the record with the new count and update the timestamp to today's date
+  - if it is the same count, then skip the update.
+- create a csv-file customers-to-suspend-YYYY-MM-DD.csv containing all customer payments which are to suspend by using today's timestamp
+- the found payments_id with more than the allowed number of payment requests are exported in a new `-to` customers-to-suspend-YYYY-MM-DD.csv file
+- if the customers-to-suspend-YYYY-MM-DD.csv file already exists, it will be overwritten with the new content
+
+## How to import customers-to-suspend-YYYY-MM-DD.csv into Excel
 
 1. Open a new empty Excel file
 2. In Excel choose menu "Data"
 3. Click on the Dropdown icon of the first menu item: Something like "Import Data from..." (Don't know the exact translation, as I'm using a German version)
 4. In the Popup-Menu choose: "From Text (Legacy)"
-5. In the File-open-Popup window choose the path and file of the customersToSuspend.csv file
+5. In the File-open-Popup window choose the path and file of the ccustomers-to-suspend-YYYY-MM-DD.csv file
 6. Click on "Import Data" button
 7. In the Text-Conversion-Assistant Step 1 of 3, choose radio-button "With delimiters - such as Commas,..."
 8. Click "Next"
