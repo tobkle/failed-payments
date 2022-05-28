@@ -1,4 +1,4 @@
-# Failed Payment Requests Processing
+# Failed-Payment-Requests Processing (FP)
 
 You have downloaded a file with failed payment requests from your payment provider. In those files you have all executed requests to customers to pay a transaction of a specific amount. These requests weren't successful. Now, you want to decide, whether you want to ignore, to warn or to suspend customers due to a number of unsuccessful payment requests. This programm helps you to get a list of customers and their payments who should get warned, and who should get suspended.
 
@@ -48,6 +48,8 @@ If you want to have more control, use the parameters and provide a value for a p
 
 ## What it does
 
+![Process Flow](/documentation/fp-process.png)
+
 The above program does the following:
 
 - it reads payment request records from a `-from` file-name.csv, which you download from your payment provider
@@ -80,6 +82,8 @@ The above program does the following:
 - create a csv-file customers-to-suspend-YYYY-MM-DD.csv containing all customer payments which are to suspend by using today's timestamp
 - the found payments_id with more than the allowed number of payment requests are exported in a new `-to` customers-to-suspend-YYYY-MM-DD.csv file
 - if the customers-to-suspend-YYYY-MM-DD.csv file already exists, it will be overwritten with the new content
+
+![Process Flow](/documentation/fp-export.png)
 
 ## How to import customers-to-suspend-YYYY-MM-DD.csv into Excel
 
