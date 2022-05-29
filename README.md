@@ -205,3 +205,13 @@ Choose a valid combination from the following table:
 | windows   | arm64    |
 
 [Source](https://go.dev/doc/install/source#environment)
+
+## Windows 64 Compilation
+
+```
+brew install mingw-w64
+env GOOS="windows" GOARCH="amd64" CGO_ENABLED="1" CC="x86_64-w64-mingw32-gcc" go build
+```
+
+SQLITE requires CGO_ENABLED=1, default is 0.
+CGO requires windows.h library, this is included in mingw
