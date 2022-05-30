@@ -20,8 +20,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"path/filepath"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+func getCurrentPath() string {
+	ex, err := os.Executable()
+    if err != nil {
+        panic(err)
+    }
+    exPath := filepath.Dir(ex)
+    fmt.Println(exPath)
+	return exPath
+}
 
 func main() {
 	var dbName string
@@ -31,9 +42,10 @@ func main() {
 	var paymentRequestsToWarn int
 	var minPaymentRequestsToSuspend int
 	var timestamp = time.Now().Format("2006-01-02")
-	var defaultSourceFileName    = "failed-payment-requests-" + timestamp + ".csv"
-	var defaultToWarnFileName    = "customers-to-warn-"       + timestamp + ".csv"
-	var defaultToSuspendFileName = "customers-to-suspend-"    + timestamp + ".csv"
+	var current_path = getCurrentPath()
+	var defaultSourceFileName    = filepath.Join( current_path, "failed-payment-requests-" + timestamp + ".csv" )
+	var defaultToWarnFileName    = filepath.Join( current_path, "customers-to-warn-"       + timestamp + ".csv" )
+	var defaultToSuspendFileName = filepath.Join( current_path, "customers-to-suspend-"    + timestamp + ".csv" )
 
 	fmt.Println(" ")
 	fmt.Println("***********************************************************")
@@ -426,6 +438,7 @@ func main() {
 			customers_metadata_leadID ,
 			COUNT(payments_id) 
 		FROM failedPaymentRequests 
+		WHERE action = "failed"
 		GROUP BY payments_id 
 		HAVING count(payments_id) >= %s 
 		ORDER BY payments_id
