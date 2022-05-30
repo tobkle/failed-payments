@@ -215,3 +215,22 @@ env GOOS="windows" GOARCH="amd64" CGO_ENABLED="1" CC="x86_64-w64-mingw32-gcc" go
 
 SQLITE requires CGO_ENABLED=1, default is 0.
 CGO requires windows.h library, this is included in mingw
+
+## Permission Denied on Mac OSX
+
+**Program is from an unverified programmer/vendor**
+
+Solution:
+Got to OS X: System Preferences –> Data Privacy –> Unlock –> Allow fp
+
+**Permission Denied, when you try to run**
+
+Solution:
+
+- start Terminal App
+- change directory where fp is located by command
+
+```
+cd <path where fp is located >
+chmod 777 fp
+```
