@@ -2,9 +2,10 @@
  * name: fp
  * description: read csv, insert into sqlite3, find payments with more than x payment requests, export result to csv
  * author: Tobias Klemmer <tobias@klemmer.info>
- * date: 2022-05-28
- * version: 2
- * state: quick and dirty prototype
+ * date:    2022-05-28
+ * changed: 2022-06-30
+ * version: 3
+ * state: prototype
  ********************************************************************************************************************/
 package main
 
@@ -36,6 +37,7 @@ func getCurrentPath() string {
 
 func main() {
 	var dbName string
+	var csvAccountsFrom string
 	var csvNameFrom string
 	var csvNameToWarn string
 	var csvNameToSuspend string
@@ -44,6 +46,7 @@ func main() {
 	var timestamp = time.Now().Format("2006-01-02")
 	var current_path = getCurrentPath()
 	var defaultSourceFileName    = filepath.Join( current_path, "failed-payment-requests-" + timestamp + ".csv" )
+	var defaultAccountsFileName  = filepath.Join( current_path, "elevate-accounts-"        + timestamp + ".csv" )
 	var defaultToWarnFileName    = filepath.Join( current_path, "customers-to-warn-"       + timestamp + ".csv" )
 	var defaultToSuspendFileName = filepath.Join( current_path, "customers-to-suspend-"    + timestamp + ".csv" )
 
@@ -55,6 +58,7 @@ func main() {
 	// get command-line parameters or use defaults
 	flag.StringVar(&dbName, "db", "failed-payment-requests-database.sqlite3", "Sqlite database to import to")
 	flag.StringVar(&csvNameFrom, "from", defaultSourceFileName, "CSV file to import from")
+	flag.StringVar(&csvAccountsFrom, "accounts", defaultAccountsFileName, "CSV file to import accounts from")
 	flag.StringVar(&csvNameToWarn, "warn", defaultToWarnFileName, "CSV file to export result to")
 	flag.StringVar(&csvNameToSuspend, "to", defaultToSuspendFileName, "CSV file to export result to")
 	flag.IntVar(&paymentRequestsToWarn, "count-warn", 3, "payment requests to warn - for exporting")
@@ -66,6 +70,7 @@ func main() {
 	}
 	
 	fmt.Println("Received      Database Name      :", dbName)
+	fmt.Println("Received CSV-From-File Accounts  :", csvAccountsFrom)
 	fmt.Println("Received CSV-From-File Name      :", csvNameFrom)
 	fmt.Println("Received CSV-To-Warn-File Name   :", csvNameToWarn)
 	fmt.Println("Received CSV-To-Suspend File Name:", csvNameToSuspend)
@@ -85,38 +90,57 @@ func main() {
 		log.Fatalf("Cannot connect to database: %s", err)
 	}
 
-	// Create or Open failedPayments table within Database
-	SQLCreateDB := `
-	  CREATE TABLE IF NOT EXISTS failedPaymentRequests (
-		id                        text primary key, 
-		created_at                text,
-		resource_type             text,
-		action                    text,
-		details_origin            text,
-		details_cause             text,
-		details_description       text,
-		details_scheme            text,
-		details_reason_code       text,
-		links_parent_event        text,
-		links_payment             text,
-		payments_id               text,
-		payments_created_at       text,
-		payments_charge_date      text,
-		payments_amount           text,
-		payments_description      text,
-		payments_currency         text,
-		payments_status           text,
-		customers_id              text,
-		customers_given_name      text,
-		customers_family_name     text,
-		customers_metadata_leadID text
+	// Create or Open Accounts table within Database
+	SQLCreateAccountsDB := `
+	  CREATE TABLE IF NOT EXISTS elevateAccounts (
+		elevate_mandate_reference text primary key,
+		elevate_account_number    text,
+		elevate_customer_name     text 
 	)`
 
-	stmt, err := db.Prepare(SQLCreateDB)
+	stmt, err := db.Prepare(SQLCreateAccountsDB)
 	if err != nil {
 		log.Fatalf("SQL Statement prepare failed: %s", err)
 	}
 	_, err = stmt.Exec()
+	if err != nil {
+		log.Fatalf("SQL Statement execution failed: %s", err)
+	}
+
+	// Create or Open failedPayments table within Database
+	SQLCreateDB := `
+	  CREATE TABLE IF NOT EXISTS failedPaymentRequests (
+		id                         text primary key, 
+		created_at                 text,
+		resource_type              text,
+		action                     text,
+		details_origin             text,
+		details_cause              text,
+		details_description        text,
+		details_scheme             text,
+		details_reason_code        text,
+		links_parent_event         text,
+		links_payment              text,
+		payments_id                text,
+		payments_created_at        text,
+		payments_charge_date       text,
+		payments_amount            text,
+		payments_description       text,
+		payments_currency          text,
+		payments_status            text,
+		customers_id               text,
+		customers_given_name       text,
+		customers_family_name      text,
+		customers_metadata_leadID  text,
+		payments_links_mandate     text,
+		payments_metadata_identity text
+	)`
+
+	stmt2, err := db.Prepare(SQLCreateDB)
+	if err != nil {
+		log.Fatalf("SQL Statement prepare failed: %s", err)
+	}
+	_, err = stmt2.Exec()
 	if err != nil {
 		log.Fatalf("SQL Statement execution failed: %s", err)
 	}
@@ -238,8 +262,10 @@ func main() {
 		log.Fatalf("SQL Statement execution failed for index on paymentsSuspended timestamp: %s", err)
 	}
 
-	// Open CSV File
-	f, err := os.Open(csvNameFrom)
+	// **********************************************************************************************
+	// Open CSV File for Accounts
+	// **********************************************************************************************
+	f, err := os.Open(csvAccountsFrom)
 	if err != nil {
 		log.Fatalf("Open CSV file failed: %s", err)
 	}
@@ -251,7 +277,98 @@ func main() {
 		log.Fatalf("Missing header row(?): %s", err)
 	}
 
-	// prepare insert record
+	// prepare insert record for Accounts
+	SQLInsertAccountsDB := `
+	INSERT INTO elevateAccounts(
+		elevate_mandate_reference,
+		elevate_account_number,
+		elevate_customer_name       
+	) values(?, ?, ?)
+	`
+	stmt, err = db.Prepare(SQLInsertAccountsDB)
+	if err != nil {
+		log.Fatalf("Prepare SQL statement for insert into table failed: %s", err)
+	}
+
+	// Loop over the records
+	for {
+		// get next record in csv file
+		record, err := r.Read()
+
+		// End of File reached
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		//  Map the fields of a csv record to variables	
+		customer_account_number			 := record[0]
+		// Customer_ID	                  	 := record[1]
+		customer_name					 := record[2]
+		// Site_ID							 := record[3]
+		// site_reference					 := record[4]
+		// product_category_name			 := record[5]
+		// product_type					 := record[6]
+		// service_id						 := record[7]
+		// product_reference				 := record[8]
+		// supplier_name					 := record[9]
+		// override						 := record[10]
+		// start_date						 := record[11]
+		// end_date						 := record[12]
+		// rental_product_name				 := record[13]
+		// cap_price_in_pence				 := record[14]
+		// provisioning_status				 := record[15]
+		// billable						 := record[16]
+		// in_flight_order					 := record[17]
+		// force_billing					 := record[18]
+		// invoice_frequency				 := record[19]
+		// bill_initial_charges_immediately := record[20]
+		// contractName					 := record[21]
+		// contractStartDate				 := record[22]
+		// contractEndDate					 := record[23]
+		// EtcFixed						 := record[24]
+		// EtcPercentage					 := record[25]
+		// contract_expires_in_months		 := record[26]
+		// customerContractDueRenewal		 := record[27]
+		// customerContractAutoRollOver	 := record[28]
+		// contractProfileName				 := record[29]
+		mandate_reference				 := record[30]
+
+		_, err = stmt.Exec(
+							mandate_reference         , 
+							customer_account_number   ,
+							customer_name             )
+		if err != nil {
+			if strings.Contains(fmt.Sprint(err), "UNIQUE constraint failed") {
+				// fmt.Println("SUCCESS: Skipped existing record with id:", customer_account_number)
+			} else {
+				fmt.Println("ERROR:   Insert into table failed for id =", customer_account_number, err)
+			}
+		} else {
+			    fmt.Println("SUCCESS: Insert into table with id:", customer_account_number)
+		}
+	}
+
+	fmt.Println("***********************************************************")
+	fmt.Println("PROCESSING ELEVATE ACCOUNTS --   ended")
+	fmt.Println("***********************************************************")
+	fmt.Println(" ")
+
+	// **********************************************************************************************
+	// Open CSV File for FailedPayments
+	// **********************************************************************************************
+	f2, err := os.Open(csvNameFrom)
+	if err != nil {
+		log.Fatalf("Open CSV file failed: %s", err)
+	}
+
+	// Read the header row
+	r2 := csv.NewReader(f2)
+	_, err = r2.Read()
+	if err != nil {
+		log.Fatalf("Missing header row(?): %s", err)
+	}
+
+	// prepare insert record for FailedPayments
 	SQLInsertDB := `
 	INSERT INTO failedPaymentRequests(
 		id                        , 
@@ -275,8 +392,10 @@ func main() {
 		customers_id              ,
 		customers_given_name      ,
 		customers_family_name     ,
-		customers_metadata_leadID 
-	) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		customers_metadata_leadID ,
+		payments_links_mandate    ,
+		payments_metadata_identity
+	) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	stmt, err = db.Prepare(SQLInsertDB)
 	if err != nil {
@@ -286,7 +405,7 @@ func main() {
 	// Loop over the records
 	for {
 		// get next record in csv file
-		record, err := r.Read()
+		record, err := r2.Read()
 
 		// End of File reached
 		if errors.Is(err, io.EOF) {
@@ -314,7 +433,7 @@ func main() {
 		payments_status := record[17]
 		// payments_amount_refunded := record[19]
 		// payments_reference := record[20]
-		// payments_links_mandate := record[21]
+		payments_links_mandate := record[21]
 		// payments_links_creditor := record[22]
 		// payments_links_payout := record[23]
 		// payments_links_subscription := record[24]
@@ -325,7 +444,7 @@ func main() {
 		customers_metadata_leadID := record[28]
 		// customers_metadata_link := record[30]
 		// customers_metadata_xero := record[31]
-		// payments_metadata_identity := record[32]
+		payments_metadata_identity := record[32]
 		// payments_metadata_invoiceNumber := record[33]
 		// payments_metadata_invoiceType := record[34]
 		// payments_metadata_xero := record[35]
@@ -352,7 +471,9 @@ func main() {
 							customers_id              ,
 							customers_given_name      ,
 							customers_family_name     ,
-							customers_metadata_leadID )
+							customers_metadata_leadID ,
+						    payments_links_mandate    ,
+							payments_metadata_identity)
 		if err != nil {
 			if strings.Contains(fmt.Sprint(err), "UNIQUE constraint failed") {
 				fmt.Println("SUCCESS: Skipped existing record with id:", id)
@@ -473,7 +594,28 @@ func main() {
 		var customers_metadata_leadID string
 		var payment_requests_count string
 
-		row.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payment_requests_count)
+		row.Scan(
+			&resource_type, 
+			&action, 
+			&details_origin, 
+			&details_cause, 
+			&details_description, 
+			&details_scheme, 
+			&details_reason_code, 
+			&links_parent_event, 
+			&links_payment, 
+			&payments_id, 
+			&payments_created_at, 
+			&payments_charge_date, 
+			&payments_amount, 
+			&payments_description, 
+			&payments_currency, 
+			&payments_status, 
+			&customers_id, 
+			&customers_given_name, 
+			&customers_family_name, 
+			&customers_metadata_leadID, 
+			&payment_requests_count)
 
 		// create record into paymentsWarnings
 		if payment_requests_count == strconv.Itoa(paymentRequestsToWarn) {
@@ -527,7 +669,7 @@ func main() {
 	fmt.Println("***********************************************************")
 	fmt.Println(" ")
 
-	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payment_requests_counted\n"
+	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payments_links_mandate,payments_metadata_identity,elevate_account_number,elevate_customer_name,payment_requests_counted\n"
 	
 
 	fmt.Println("***********************************************************")
@@ -568,10 +710,16 @@ func main() {
 			failedPaymentRequests.customers_given_name       ,
 			failedPaymentRequests.customers_family_name      ,
 			failedPaymentRequests.customers_metadata_leadID  ,
-			COUNT(paymentsWarnings.payments_id) 
+			failedPaymentRequests.payments_links_mandate     ,
+			failedPaymentRequests.payments_metadata_identity ,
+			COUNT(paymentsWarnings.payments_id)              ,
+			elevateAccounts.elevate_account_number           ,
+			elevateAccounts.elevate_customer_name            
 		FROM paymentsWarnings
 		INNER JOIN failedPaymentRequests 
-		ON failedPaymentRequests.payments_id = paymentsWarnings.payments_id 
+		ON failedPaymentRequests.payments_id = paymentsWarnings.payments_id
+		LEFT  JOIN elevateAccounts
+		ON failedPaymentRequests.payments_links_mandate = elevateAccounts.elevate_mandate_reference
 		WHERE paymentsWarnings.timestamp = "%s"
 		GROUP BY   paymentsWarnings.payments_id 
 		ORDER BY   paymentsWarnings.payments_id
@@ -604,9 +752,13 @@ func main() {
 		var customers_given_name string
 		var customers_family_name string
 		var customers_metadata_leadID string
-		var payment_requests_count string
+		var payments_links_mandate     string
+	    var payments_metadata_identity string
+		var payment_requests_count string      
+	    var elevate_account_number     string
+		var elevate_customer_name      string
 
-		rowWarnings.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payment_requests_count)
+		rowWarnings.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payments_links_mandate, &payments_metadata_identity, &payment_requests_count, &elevate_account_number, &elevate_customer_name)
 
 		resultText := 	"\"" + resource_type + "\"," +
 						"\"" + action + "\"," + 
@@ -620,7 +772,7 @@ func main() {
 						"\"" + payments_id + "\"," + 
 						"\"" + payments_created_at + "\"," + 
 						"\"" + payments_charge_date + "\"," + 
-						       payments_amount + "," + 
+							payments_amount + "," + 
 						"\"" + payments_description + "\"," + 
 						"\"" + payments_currency + "\"," + 
 						"\"" + payments_status + "\"," + 
@@ -628,6 +780,10 @@ func main() {
 						"\"" + customers_given_name + "\"," + 
 						"\"" + customers_family_name + "\"," + 
 						"\"" + customers_metadata_leadID + "\"," + 
+						"\"" + payments_links_mandate + "\"," + 
+						"\"" + payments_metadata_identity + "\"," + 
+						"\"" + elevate_account_number + "\"," + 
+						"\"" + elevate_customer_name + "\"," + 
 						payment_requests_count + "\n"
 
 		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToWarn))
@@ -682,10 +838,16 @@ func main() {
 			failedPaymentRequests.customers_given_name       ,
 			failedPaymentRequests.customers_family_name      ,
 			failedPaymentRequests.customers_metadata_leadID  ,
-			COUNT(failedPaymentRequests.payments_id) 
+			failedPaymentRequests.payments_links_mandate     ,
+			failedPaymentRequests.payments_metadata_identity ,
+			COUNT(failedPaymentRequests.payments_id)         ,
+			elevateAccounts.elevate_account_number           ,
+			elevateAccounts.elevate_customer_name            
 		FROM       paymentsSuspended
 		INNER JOIN failedPaymentRequests 
 		ON         failedPaymentRequests.payments_id = paymentsSuspended.payments_id
+		LEFT JOIN elevateAccounts
+		ON failedPaymentRequests.payments_links_mandate = elevateAccounts.elevate_mandate_reference
 		WHERE      paymentsSuspended.timestamp = "%s"
 		GROUP BY   failedPaymentRequests.payments_id 
 		ORDER BY   failedPaymentRequests.payments_id
@@ -717,10 +879,39 @@ func main() {
 		var customers_id string
 		var customers_given_name string
 		var customers_family_name string
-		var customers_metadata_leadID string
-		var payment_requests_count string
+		var customers_metadata_leadID  string
+		var payments_links_mandate     string
+		var payments_metadata_identity string
+		var payment_requests_count     string
+		var elevate_account_number     string
+		var elevate_customer_name      string
 
-		rowSuspended.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payment_requests_count)
+		rowSuspended.Scan(
+			&resource_type, 
+			&action, 
+			&details_origin, 
+			&details_cause,
+			&details_description, 
+			&details_scheme, 
+			&details_reason_code, 
+			&links_parent_event, 
+			&links_payment, 
+			&payments_id, 
+			&payments_created_at, 
+			&payments_charge_date, 
+			&payments_amount, 
+			&payments_description, 
+			&payments_currency, 
+			&payments_status, 
+			&customers_id, 
+			&customers_given_name, 
+			&customers_family_name, 
+			&customers_metadata_leadID, 
+			&payments_links_mandate, 
+			&payments_metadata_identity, 
+			&payment_requests_count,
+			&elevate_account_number, 
+			&elevate_customer_name)
 
 		resultText := 	"\"" + resource_type + "\"," +
 						"\"" + action + "\"," + 
@@ -742,6 +933,10 @@ func main() {
 						"\"" + customers_given_name + "\"," + 
 						"\"" + customers_family_name + "\"," + 
 						"\"" + customers_metadata_leadID + "\"," + 
+						"\"" + payments_links_mandate + "\"," + 
+						"\"" + payments_metadata_identity + "\"," + 
+						"\"" + elevate_account_number + "\"," + 
+						"\"" + elevate_customer_name + "\"," + 
 						payment_requests_count + "\n"
 
 		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspend))

@@ -2,6 +2,8 @@
 
 You have downloaded a file with failed payment requests from your payment provider. In those files you have all executed requests to customers to pay a transaction of a specific amount. These requests weren't successful. Now, you want to decide, whether you want to ignore, to warn or to suspend customers due to a number of unsuccessful payment requests. This programm helps you to get a list of customers and their payments who should get warned, and who should get suspended.
 
+Additionally, you downloaded a csv file from Elevate System with file name: elevate-accounts-YYYY-MM-DD.csv
+
 ## Download Executable
 
 Click on fp and download the executable
@@ -33,6 +35,7 @@ This will use the default values:
 ```
 Parameter:      Default value:
 - db            = failed-payment-requests-database.sqlite3
+- accounts      = elevate-accounts-YYYY-MM-DD.csv          with today's accounts from Elevate System
 - from          = failed-payment-requests-YYYY-MM-DD.csv   with today's date: YYYY=year, MM=month, DD=day)
 - to            = customers-to-suspend-YYYY-MM-DD.csv      with today's date: YYYY=year, MM=month, DD=day)
 - warn          = customers-to-warn-YYYY-MM-DD.csv         with today's date: YYYY=year, MM=month, DD=day)
@@ -52,6 +55,7 @@ If you want to have more control, use the parameters and provide a value for a p
 
 The above program does the following:
 
+- it reads accounts records from a `-accounts` file-name.csv, which you download from your Elevate system
 - it reads payment request records from a `-from` file-name.csv, which you download from your payment provider
 - if this parameter isn't provided, it opens the csv file: failed-payments-YYYY-MM-DD.csv
 - it writes those records to a local `-db` dbname.sqlite3 database, and...
@@ -67,6 +71,7 @@ The above program does the following:
   - timestamp with today's date as secondary index
   - customers_id, customers_given_name, customers_family_name, customers_metadata_leadID
 - create a csv-file customers-to-warn-YYYY-MM-DD.csv containing all customer payments which got a warning record today
+- enriching the the files with the account-numbers for the Elevate system for easier processing
 
 ### Customers To Suspend
 
@@ -221,7 +226,7 @@ CGO requires windows.h library, this is included in mingw
 **Program is from an unverified programmer/vendor**
 
 Solution:
-Got to OS X: System Preferences –> Data Privacy –> Unlock –> Allow fp
+Go to OS X: System Preferences –> Data Privacy –> Unlock –> Allow fp
 
 **Permission Denied, when you try to run**
 
