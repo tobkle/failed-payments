@@ -433,7 +433,7 @@ func main() {
 		payments_status := record[17]
 		// payments_amount_refunded := record[19]
 		// payments_reference := record[20]
-		payments_links_mandate := record[21]
+		payments_links_mandate := record[20]
 		// payments_links_creditor := record[22]
 		// payments_links_payout := record[23]
 		// payments_links_subscription := record[24]
