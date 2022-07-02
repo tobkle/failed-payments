@@ -45,6 +45,7 @@ func main() {
 	var minPaymentRequestsToSuspend int
 	var timestamp = time.Now().Format("2006-01-02")
 	var current_path = getCurrentPath()
+	var defaultDatabaseName      = filepath.Join( current_path, "failed-payment-requests-database.sqlite3"      )
 	var defaultSourceFileName    = filepath.Join( current_path, "failed-payment-requests-" + timestamp + ".csv" )
 	var defaultAccountsFileName  = filepath.Join( current_path, "elevate-accounts-"        + timestamp + ".csv" )
 	var defaultToWarnFileName    = filepath.Join( current_path, "customers-to-warn-"       + timestamp + ".csv" )
@@ -56,7 +57,7 @@ func main() {
 	fmt.Println("***********************************************************")
 	
 	// get command-line parameters or use defaults
-	flag.StringVar(&dbName, "db", "failed-payment-requests-database.sqlite3", "Sqlite database to import to")
+	flag.StringVar(&dbName, "db", defaultDatabaseName, "Sqlite database to import to")
 	flag.StringVar(&csvNameFrom, "from", defaultSourceFileName, "CSV file to import from")
 	flag.StringVar(&csvAccountsFrom, "accounts", defaultAccountsFileName, "CSV file to import accounts from")
 	flag.StringVar(&csvNameToWarn, "warn", defaultToWarnFileName, "CSV file to export result to")

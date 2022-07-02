@@ -213,7 +213,7 @@ Choose a valid combination from the following table:
 
 ## Windows 64 Compilation
 
-```
+``` 
 brew install mingw-w64
 env GOOS="windows" GOARCH="amd64" CGO_ENABLED="1" CC="x86_64-w64-mingw32-gcc" go build
 ```
