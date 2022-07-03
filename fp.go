@@ -690,7 +690,7 @@ func main() {
 	}
 
 	SQLQueryExportWarnings := fmt.Sprintf(`
-		SELECT 
+		SELECT DISTINCT
 			failedPaymentRequests.resource_type              ,
 			failedPaymentRequests.action                     ,
 			failedPaymentRequests.details_origin             ,
@@ -818,7 +818,7 @@ func main() {
 	}
 
 	SQLQueryExportSuspended := fmt.Sprintf(`
-		SELECT 
+		SELECT DISTINCT
 			failedPaymentRequests.resource_type              ,
 			failedPaymentRequests.action                     ,
 			failedPaymentRequests.details_origin             ,
