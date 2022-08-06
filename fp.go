@@ -4,7 +4,7 @@
  * author: Tobias Klemmer <tobias@klemmer.info>
  * date:    2022-05-28
  * changed: 2022-08-04
- * version: 6
+ * version: 7
  * state: prototype
  ********************************************************************************************************************/
 package main
@@ -1137,16 +1137,16 @@ func main() {
 						"\"" + crm_stage_name + "\"\n"
 
 		paymentValue, err := strconv.ParseFloat(payments_amount, 64)
-		if paymentValue < amountToSwitch {
-			log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspendSmall))
-			if _, err = targetFileSuspendSmall.WriteString(resultText); err != nil {
-				panic(err)
-			}
+		if paymentValue > amountToSwitch {
+				log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspendLarge))
+				if _, err = targetFileSuspendLarge.WriteString(resultText); err != nil {
+					panic(err)
+				}
 		} else {			
-			log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspendLarge))
-			if _, err = targetFileSuspendLarge.WriteString(resultText); err != nil {
-				panic(err)
-			}
+				log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspendSmall))
+				if _, err = targetFileSuspendSmall.WriteString(resultText); err != nil {
+					panic(err)
+				}
 		}
 	}
 
