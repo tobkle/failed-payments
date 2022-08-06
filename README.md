@@ -36,8 +36,11 @@ This will use the default values:
 Parameter:      Default value:
 - db            = failed-payment-requests-database.sqlite3
 - accounts      = elevate-accounts-YYYY-MM-DD.csv          with today's accounts from Elevate System
+- crm           = crm-accounts-YYYY-MM-DD.csv              with today's/week's accounts from CRM System
 - from          = failed-payment-requests-YYYY-MM-DD.csv   with today's date: YYYY=year, MM=month, DD=day)
-- to            = customers-to-suspend-YYYY-MM-DD.csv      with today's date: YYYY=year, MM=month, DD=day)
+- toSmall       = customers-to-suspend-small-YYYY-MM-DD.csv      with today's date: YYYY=year, MM=month, DD=day)
+- toLarge       = customers-to-suspend-large-YYYY-MM-DD.csv      with today's date: YYYY=year, MM=month, DD=day)
+- amount        = amount to differ between small and large amounts (default: 20 GBP)
 - warn          = customers-to-warn-YYYY-MM-DD.csv         with today's date: YYYY=year, MM=month, DD=day)
 - count-warn    = 3                                        warn customers with 3 payment requests
 - count-suspend = 4                                        suspend customers with 4 or more payment requests
@@ -56,6 +59,7 @@ If you want to have more control, use the parameters and provide a value for a p
 The above program does the following:
 
 - it reads accounts records from a `-accounts` file-name.csv, which you download from your Elevate system
+- it reads crm accounts records from a `-crm` file-name.csv, which you download from your CRM system
 - it reads payment request records from a `-from` file-name.csv, which you download from your payment provider
 - if this parameter isn't provided, it opens the csv file: failed-payments-YYYY-MM-DD.csv
 - it writes those records to a local `-db` dbname.sqlite3 database, and...
@@ -213,7 +217,7 @@ Choose a valid combination from the following table:
 
 ## Windows 64 Compilation
 
-``` 
+```
 brew install mingw-w64
 env GOOS="windows" GOARCH="amd64" CGO_ENABLED="1" CC="x86_64-w64-mingw32-gcc" go build
 ```

@@ -3,8 +3,8 @@
  * description: read csv, insert into sqlite3, find payments with more than x payment requests, export result to csv
  * author: Tobias Klemmer <tobias@klemmer.info>
  * date:    2022-05-28
- * changed: 2022-06-30
- * version: 3
+ * changed: 2022-08-04
+ * version: 6
  * state: prototype
  ********************************************************************************************************************/
 package main
@@ -38,18 +38,23 @@ func getCurrentPath() string {
 func main() {
 	var dbName string
 	var csvAccountsFrom string
+	var csvCRMFrom string
 	var csvNameFrom string
 	var csvNameToWarn string
-	var csvNameToSuspend string
+	var csvNameToSuspendSmall string
+	var csvNameToSuspendLarge string
 	var paymentRequestsToWarn int
 	var minPaymentRequestsToSuspend int
+	var amountToSwitch float64
 	var timestamp = time.Now().Format("2006-01-02")
 	var current_path = getCurrentPath()
 	var defaultDatabaseName      = filepath.Join( current_path, "failed-payment-requests-database.sqlite3"      )
 	var defaultSourceFileName    = filepath.Join( current_path, "failed-payment-requests-" + timestamp + ".csv" )
 	var defaultAccountsFileName  = filepath.Join( current_path, "elevate-accounts-"        + timestamp + ".csv" )
+	var defaultCRMFileName       = filepath.Join( current_path, "crm-accounts-"                     + timestamp + ".csv" )
 	var defaultToWarnFileName    = filepath.Join( current_path, "customers-to-warn-"       + timestamp + ".csv" )
-	var defaultToSuspendFileName = filepath.Join( current_path, "customers-to-suspend-"    + timestamp + ".csv" )
+	var defaultToSuspendFileNameSmall = filepath.Join( current_path, "customers-to-suspend-small-"    + timestamp + ".csv" )
+	var defaultToSuspendFileNameLarge = filepath.Join( current_path, "customers-to-suspend-large-"    + timestamp + ".csv" )
 
 	fmt.Println(" ")
 	fmt.Println("***********************************************************")
@@ -60,21 +65,26 @@ func main() {
 	flag.StringVar(&dbName, "db", defaultDatabaseName, "Sqlite database to import to")
 	flag.StringVar(&csvNameFrom, "from", defaultSourceFileName, "CSV file to import from")
 	flag.StringVar(&csvAccountsFrom, "accounts", defaultAccountsFileName, "CSV file to import accounts from")
+	flag.StringVar(&csvCRMFrom, "crm", defaultCRMFileName, "CSV file to import crm from")
 	flag.StringVar(&csvNameToWarn, "warn", defaultToWarnFileName, "CSV file to export result to")
-	flag.StringVar(&csvNameToSuspend, "to", defaultToSuspendFileName, "CSV file to export result to")
+	flag.StringVar(&csvNameToSuspendSmall, "toSmall", defaultToSuspendFileNameSmall, "CSV file small to export result to")
+	flag.StringVar(&csvNameToSuspendLarge, "toLarge", defaultToSuspendFileNameLarge, "CSV file large to export result to")
 	flag.IntVar(&paymentRequestsToWarn, "count-warn", 3, "payment requests to warn - for exporting")
 	flag.IntVar(&minPaymentRequestsToSuspend, "count-suspend", 4, "minimum payment requests  to suspend- for exporting")
+	flag.Float64Var(&amountToSwitch, "amount", 20.0, "amount to switch between small and large amounts")
 	flag.Parse()
 	
-	if dbName == "" || csvNameFrom == ""|| csvNameToWarn == "" || csvNameToSuspend == "" {
+	if dbName == "" || csvNameFrom == ""|| csvNameToWarn == "" || csvNameToSuspendSmall == "" {
 		flag.PrintDefaults()
 	}
 	
 	fmt.Println("Received      Database Name      :", dbName)
 	fmt.Println("Received CSV-From-File Accounts  :", csvAccountsFrom)
+	fmt.Println("Received CSV-From-File CRM       :", csvCRMFrom)
 	fmt.Println("Received CSV-From-File Name      :", csvNameFrom)
 	fmt.Println("Received CSV-To-Warn-File Name   :", csvNameToWarn)
-	fmt.Println("Received CSV-To-Suspend File Name:", csvNameToSuspend)
+	fmt.Println("Received CSV-To-Suspend File Name:", csvNameToSuspendSmall)
+	fmt.Println("Received CSV-To-Suspend File Name:", csvNameToSuspendLarge)
 	fmt.Println("Minimum Payment Requests Warn    :", paymentRequestsToWarn)
 	fmt.Println("Minimum Payment Requests Suspend :", minPaymentRequestsToSuspend)
 	fmt.Println("***********************************************************")
@@ -142,6 +152,26 @@ func main() {
 		log.Fatalf("SQL Statement prepare failed: %s", err)
 	}
 	_, err = stmt2.Exec()
+	if err != nil {
+		log.Fatalf("SQL Statement execution failed: %s", err)
+	}
+
+	// Create or Open CRM table within Database
+	SQLCreateCRMAccountsDB := `
+	  CREATE TABLE IF NOT EXISTS crmAccounts (
+		crm_account_number    text primary key,
+		crm_id                text,
+		crm_name              text,
+		crm_email             text,
+		crm_premise_address   text,
+		crm_stage_name        text
+	)`
+
+	stmt3, err := db.Prepare(SQLCreateCRMAccountsDB)
+	if err != nil {
+		log.Fatalf("SQL Statement prepare failed: %s", err)
+	}
+	_, err = stmt3.Exec()
 	if err != nil {
 		log.Fatalf("SQL Statement execution failed: %s", err)
 	}
@@ -302,37 +332,44 @@ func main() {
 		}
 
 		//  Map the fields of a csv record to variables	
-		customer_account_number			 := record[0]
+		   customer_account_number			 := record[0]
 		// Customer_ID	                  	 := record[1]
-		customer_name					 := record[2]
+		   customer_name					 := record[2]
 		// Site_ID							 := record[3]
 		// site_reference					 := record[4]
 		// product_category_name			 := record[5]
-		// product_type					 := record[6]
+		// product_type				    	 := record[6]
 		// service_id						 := record[7]
 		// product_reference				 := record[8]
 		// supplier_name					 := record[9]
-		// override						 := record[10]
+		// override						     := record[10]
 		// start_date						 := record[11]
-		// end_date						 := record[12]
+		// end_date						     := record[12]
 		// rental_product_name				 := record[13]
 		// cap_price_in_pence				 := record[14]
 		// provisioning_status				 := record[15]
-		// billable						 := record[16]
+		// billable						     := record[16]
 		// in_flight_order					 := record[17]
 		// force_billing					 := record[18]
 		// invoice_frequency				 := record[19]
-		// bill_initial_charges_immediately := record[20]
-		// contractName					 := record[21]
+		// bill_initial_charges_immediately  := record[20]
+		// contractName					     := record[21]
 		// contractStartDate				 := record[22]
 		// contractEndDate					 := record[23]
-		// EtcFixed						 := record[24]
+		// EtcFixed						     := record[24]
 		// EtcPercentage					 := record[25]
 		// contract_expires_in_months		 := record[26]
 		// customerContractDueRenewal		 := record[27]
-		// customerContractAutoRollOver	 := record[28]
+		// customerContractAutoRollOver	     := record[28]
 		// contractProfileName				 := record[29]
-		mandate_reference				 := record[30]
+		   mandate_reference				 := record[30]
+		// site_address_line1                := record[31]
+		// site_address_line2                := record[32]
+		// town                              := record[33]
+		// county                            := record[34]
+		// post_code                         := record[35]
+		// country                           := record[36]
+
 
 		_, err = stmt.Exec(
 							mandate_reference         , 
@@ -342,15 +379,94 @@ func main() {
 			if strings.Contains(fmt.Sprint(err), "UNIQUE constraint failed") {
 				// fmt.Println("SUCCESS: Skipped existing record with id:", customer_account_number)
 			} else {
-				fmt.Println("ERROR:   Insert into table failed for id =", customer_account_number, err)
+				fmt.Println("ERROR:   Insert into table elevateAccounts failed for id =", customer_account_number, err)
 			}
 		} else {
-			    fmt.Println("SUCCESS: Insert into table with id:", customer_account_number)
+			    fmt.Println("SUCCESS: Insert into table elevateAccounts with id:", customer_account_number)
 		}
 	}
 
 	fmt.Println("***********************************************************")
 	fmt.Println("PROCESSING ELEVATE ACCOUNTS --   ended")
+	fmt.Println("***********************************************************")
+	fmt.Println(" ")
+
+	// **********************************************************************************************
+	// Open CSV File for CRM Accounts
+	// **********************************************************************************************
+	f3, err := os.Open(csvCRMFrom)
+	if err != nil {
+		// skip this if not exists
+		fmt.Println("Skipping CRM Accounts file, as there is no current crm-accounts-YYYY-MM-DD.csv file provided....")
+	} else {
+		// process only if the CRM Accounts file exists
+		// Read the header row
+		semiReader := csv.NewReader(f3)
+		// semiReader.Comma = ';'
+		_, err = semiReader.Read()
+		if err != nil {
+			log.Fatalf("Missing header row(?): %s", err)
+		}
+
+		// prepare insert record for Accounts
+		SQLInsertCRMAccountsDB := `
+		INSERT INTO crmAccounts(
+			crm_account_number,
+			crm_id,
+			crm_name,
+			crm_email,
+			crm_premise_address,
+			crm_stage_name     
+		) values(?, ?, ?, ?, ?, ?)
+		`
+		stmt, err = db.Prepare(SQLInsertCRMAccountsDB)
+		if err != nil {
+			log.Fatalf("Prepare SQL statement for insert into table failed: %s", err)
+		}
+
+		// Loop over the records
+		for {
+			// get next record in csv file
+			record, err := semiReader.Read()
+
+			// End of File reached
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			//  Map the fields of a csv record to variables	
+			crm_account_number			  := record[0]
+			// C0UserID	                  := record[1]
+			crm_premise_address           := record[2]
+			// Premise_Type	              := record[3]
+			crm_stage_name                := record[4]
+			// Status	                  := record[5]
+			crm_name	                  := record[6]
+			crm_email	                  := record[7]
+			// C0_Go_CardLess_Customer_ID := record[8]	
+			crm_id	                      := record[9]
+			// Count                      := record[10]
+
+			_, err = stmt.Exec(
+						crm_account_number,
+						crm_id,
+						crm_name,
+						crm_email,
+						crm_premise_address,
+						crm_stage_name       )
+			if err != nil {
+				if strings.Contains(fmt.Sprint(err), "UNIQUE constraint failed") {
+					// fmt.Println("SUCCESS: Skipped existing record with id:", customer_account_number)
+				} else {
+					fmt.Println("ERROR:   Insert into table crmAccounts failed for id =", crm_account_number, crm_id, err)
+				}
+			} else {
+					fmt.Println("SUCCESS: Insert into table crmAccounts with id:", crm_account_number, crm_id)
+			}
+		}
+	}
+	fmt.Println("***********************************************************")
+	fmt.Println("PROCESSING ELEVATE CRM ACCOUNTS --   ended")
 	fmt.Println("***********************************************************")
 	fmt.Println(" ")
 
@@ -670,7 +786,7 @@ func main() {
 	fmt.Println("***********************************************************")
 	fmt.Println(" ")
 
-	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payments_links_mandate,payments_metadata_identity,elevate_account_number,elevate_customer_name,payment_requests_counted\n"
+	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payments_links_mandate,payments_metadata_identity,elevate_account_number,elevate_customer_name,payment_requests_counted,crm_id,crm_name,crm_email,crm_premise_address,crm_stage_name\n"
 	
 
 	fmt.Println("***********************************************************")
@@ -715,12 +831,19 @@ func main() {
 			failedPaymentRequests.payments_metadata_identity ,
 			COUNT(paymentsWarnings.payments_id)              ,
 			elevateAccounts.elevate_account_number           ,
-			elevateAccounts.elevate_customer_name            
+			elevateAccounts.elevate_customer_name            ,
+			crmAccounts.crm_id                               ,
+			crmAccounts.crm_name                             ,
+			crmAccounts.crm_email                            ,
+			crmAccounts.crm_premise_address                  ,
+			crmAccounts.crm_stage_name        
 		FROM paymentsWarnings
 		INNER JOIN failedPaymentRequests 
 		ON failedPaymentRequests.payments_id = paymentsWarnings.payments_id
 		LEFT  JOIN elevateAccounts
 		ON failedPaymentRequests.payments_links_mandate = elevateAccounts.elevate_mandate_reference
+		LEFT JOIN crmAccounts
+		ON elevateAccounts.elevate_account_number = crmAccounts.crm_account_number
 		WHERE paymentsWarnings.timestamp = "%s"
 		GROUP BY   paymentsWarnings.payments_id 
 		ORDER BY   paymentsWarnings.payments_id
@@ -758,8 +881,42 @@ func main() {
 		var payment_requests_count string      
 	    var elevate_account_number     string
 		var elevate_customer_name      string
+		var crm_id                 string
+		var crm_name               string
+		var crm_email              string
+		var crm_premise_address    string
+		var crm_stage_name         string
 
-		rowWarnings.Scan(&resource_type, &action, &details_origin, &details_cause, &details_description, &details_scheme, &details_reason_code, &links_parent_event, &links_payment, &payments_id, &payments_created_at, &payments_charge_date, &payments_amount, &payments_description, &payments_currency, &payments_status, &customers_id, &customers_given_name, &customers_family_name, &customers_metadata_leadID, &payments_links_mandate, &payments_metadata_identity, &payment_requests_count, &elevate_account_number, &elevate_customer_name)
+		rowWarnings.Scan(&resource_type, 
+			&action, 
+			&details_origin, 
+			&details_cause, 
+			&details_description, 
+			&details_scheme, 
+			&details_reason_code, 
+			&links_parent_event, 
+			&links_payment, 
+			&payments_id, 
+			&payments_created_at, 
+			&payments_charge_date, 
+			&payments_amount, 
+			&payments_description, 
+			&payments_currency, 
+			&payments_status, 
+			&customers_id, 
+			&customers_given_name, 
+			&customers_family_name, 
+			&customers_metadata_leadID, 
+			&payments_links_mandate, 
+			&payments_metadata_identity, 
+			&payment_requests_count, 
+			&elevate_account_number, 
+			&elevate_customer_name,
+			&crm_id,
+			&crm_name,
+			&crm_email,
+			&crm_premise_address,
+			&crm_stage_name)
 
 		resultText := 	"\"" + resource_type + "\"," +
 						"\"" + action + "\"," + 
@@ -785,7 +942,13 @@ func main() {
 						"\"" + payments_metadata_identity + "\"," + 
 						"\"" + elevate_account_number + "\"," + 
 						"\"" + elevate_customer_name + "\"," + 
-						payment_requests_count + "\n"
+						       payment_requests_count + ","  +
+						"\"" + crm_id + "\"," + 
+						"\"" + crm_name + "\"," + 
+						"\"" + crm_email + "\"," + 
+						"\"" + crm_premise_address + "\"," + 
+						"\"" + crm_stage_name + "\"\n"
+
 
 		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToWarn))
 		
@@ -806,14 +969,25 @@ func main() {
 	fmt.Println("***********************************************************")
 	fmt.Println(" ")
 
-	// write export file to customers-to-suspend-YYYY-MM-DD.csv
-	targetFileSuspend, err := os.OpenFile(csvNameToSuspend, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	// write export file to customers-to-suspend-small-YYYY-MM-DD.csv
+	targetFileSuspendSmall, err := os.OpenFile(csvNameToSuspendSmall, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		panic(err)
 	}
-	defer targetFileSuspend.Close()
+	defer targetFileSuspendSmall.Close()
 
-	if _, err = targetFileSuspend.WriteString(headerText); err != nil {
+	if _, err = targetFileSuspendSmall.WriteString(headerText); err != nil {
+		panic(err)
+	}
+
+	// write export file to customers-to-suspend-large-YYYY-MM-DD.csv
+	targetFileSuspendLarge, err := os.OpenFile(csvNameToSuspendLarge, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer targetFileSuspendLarge.Close()
+
+	if _, err = targetFileSuspendLarge.WriteString(headerText); err != nil {
 		panic(err)
 	}
 
@@ -843,12 +1017,19 @@ func main() {
 			failedPaymentRequests.payments_metadata_identity ,
 			COUNT(failedPaymentRequests.payments_id)         ,
 			elevateAccounts.elevate_account_number           ,
-			elevateAccounts.elevate_customer_name            
+			elevateAccounts.elevate_customer_name            ,
+			crmAccounts.crm_id                               ,
+			crmAccounts.crm_name                             ,
+			crmAccounts.crm_email                            ,
+			crmAccounts.crm_premise_address                  ,
+			crmAccounts.crm_stage_name  
 		FROM       paymentsSuspended
 		INNER JOIN failedPaymentRequests 
 		ON         failedPaymentRequests.payments_id = paymentsSuspended.payments_id
 		LEFT JOIN elevateAccounts
 		ON failedPaymentRequests.payments_links_mandate = elevateAccounts.elevate_mandate_reference
+		LEFT JOIN crmAccounts
+		ON elevateAccounts.elevate_account_number = crmAccounts.crm_account_number
 		WHERE      paymentsSuspended.timestamp = "%s"
 		GROUP BY   failedPaymentRequests.payments_id 
 		ORDER BY   failedPaymentRequests.payments_id
@@ -886,6 +1067,11 @@ func main() {
 		var payment_requests_count     string
 		var elevate_account_number     string
 		var elevate_customer_name      string
+		var crm_id                 string
+		var crm_name               string
+		var crm_email              string
+		var crm_premise_address    string
+		var crm_stage_name         string
 
 		rowSuspended.Scan(
 			&resource_type, 
@@ -912,7 +1098,12 @@ func main() {
 			&payments_metadata_identity, 
 			&payment_requests_count,
 			&elevate_account_number, 
-			&elevate_customer_name)
+			&elevate_customer_name,
+			&crm_id,
+			&crm_name,
+			&crm_email,
+			&crm_premise_address,
+			&crm_stage_name)
 
 		resultText := 	"\"" + resource_type + "\"," +
 						"\"" + action + "\"," + 
@@ -938,12 +1129,24 @@ func main() {
 						"\"" + payments_metadata_identity + "\"," + 
 						"\"" + elevate_account_number + "\"," + 
 						"\"" + elevate_customer_name + "\"," + 
-						payment_requests_count + "\n"
+						       payment_requests_count +  "," +
+						"\"" + crm_id + "\"," + 
+						"\"" + crm_name + "\"," + 
+						"\"" + crm_email + "\"," + 
+						"\"" + crm_premise_address + "\"," + 
+						"\"" + crm_stage_name + "\"\n"
 
-		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspend))
-		
-		if _, err = targetFileSuspend.WriteString(resultText); err != nil {
-			panic(err)
+		paymentValue, err := strconv.ParseFloat(payments_amount, 64)
+		if paymentValue < amountToSwitch {
+			log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspendSmall))
+			if _, err = targetFileSuspendSmall.WriteString(resultText); err != nil {
+				panic(err)
+			}
+		} else {			
+			log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToSuspendLarge))
+			if _, err = targetFileSuspendLarge.WriteString(resultText); err != nil {
+				panic(err)
+			}
 		}
 	}
 
