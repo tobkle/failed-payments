@@ -3,8 +3,8 @@
  * description: read csv, insert into sqlite3, find payments with more than x payment requests, export result to csv
  * author: Tobias Klemmer <tobias@klemmer.info>
  * date:    2022-05-28
- * changed: 2022-08-04
- * version: 7
+ * changed: 2022-08-10
+ * version: 8
  * state: prototype
  ********************************************************************************************************************/
 package main
@@ -164,8 +164,10 @@ func main() {
 		crm_name              text,
 		crm_email             text,
 		crm_premise_address   text,
-		crm_stage_name        text
-	)`
+		crm_stage_name        text,
+		crm_zen_user_id       text
+	   )
+	`
 
 	stmt3, err := db.Prepare(SQLCreateCRMAccountsDB)
 	if err != nil {
@@ -416,9 +418,10 @@ func main() {
 			crm_name,
 			crm_email,
 			crm_premise_address,
-			crm_stage_name     
-		) values(?, ?, ?, ?, ?, ?)
-		`
+			crm_stage_name,
+			crm_zen_user_id     
+		) values(?, ?, ?, ?, ?, ?, ?)`
+
 		stmt, err = db.Prepare(SQLInsertCRMAccountsDB)
 		if err != nil {
 			log.Fatalf("Prepare SQL statement for insert into table failed: %s", err)
@@ -445,7 +448,8 @@ func main() {
 			crm_email	                  := record[7]
 			// C0_Go_CardLess_Customer_ID := record[8]	
 			crm_id	                      := record[9]
-			// Count                      := record[10]
+			crm_zen_user_id               := record[10]			           
+			// Count                      := record[11]
 
 			_, err = stmt.Exec(
 						crm_account_number,
@@ -453,7 +457,8 @@ func main() {
 						crm_name,
 						crm_email,
 						crm_premise_address,
-						crm_stage_name       )
+						crm_stage_name,
+						crm_zen_user_id       )
 			if err != nil {
 				if strings.Contains(fmt.Sprint(err), "UNIQUE constraint failed") {
 					// fmt.Println("SUCCESS: Skipped existing record with id:", customer_account_number)
@@ -786,7 +791,7 @@ func main() {
 	fmt.Println("***********************************************************")
 	fmt.Println(" ")
 
-	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payments_links_mandate,payments_metadata_identity,elevate_account_number,elevate_customer_name,payment_requests_counted,crm_id,crm_name,crm_email,crm_premise_address,crm_stage_name\n"
+	headerText := "resource_type,action,details_origin,details_cause,details_description,details_scheme,details_reason_code,links_parent_event,links_payment,payments_id,payments_created_at,payments_charge_date,payments_amount,payments_description,payments_currency,payments_status,customers_id,customers_given_name,customers_family_name,customers_metadata_leadID,payments_links_mandate,payments_metadata_identity,elevate_account_number,elevate_customer_name,payment_requests_counted,crm_id,crm_name,crm_email,crm_premise_address,crm_stage_name,crm_zen_user_id\n"
 	
 
 	fmt.Println("***********************************************************")
@@ -836,7 +841,8 @@ func main() {
 			crmAccounts.crm_name                             ,
 			crmAccounts.crm_email                            ,
 			crmAccounts.crm_premise_address                  ,
-			crmAccounts.crm_stage_name        
+			crmAccounts.crm_stage_name                       ,
+			crmAccounts.crm_zen_user_id    
 		FROM paymentsWarnings
 		INNER JOIN failedPaymentRequests 
 		ON failedPaymentRequests.payments_id = paymentsWarnings.payments_id
@@ -886,6 +892,7 @@ func main() {
 		var crm_email              string
 		var crm_premise_address    string
 		var crm_stage_name         string
+		var crm_zen_user_id        string
 
 		rowWarnings.Scan(&resource_type, 
 			&action, 
@@ -916,7 +923,8 @@ func main() {
 			&crm_name,
 			&crm_email,
 			&crm_premise_address,
-			&crm_stage_name)
+			&crm_stage_name,
+		    &crm_zen_user_id )
 
 		resultText := 	"\"" + resource_type + "\"," +
 						"\"" + action + "\"," + 
@@ -947,7 +955,8 @@ func main() {
 						"\"" + crm_name + "\"," + 
 						"\"" + crm_email + "\"," + 
 						"\"" + crm_premise_address + "\"," + 
-						"\"" + crm_stage_name + "\"\n"
+						"\"" + crm_stage_name + "\"," + 
+						"\"" + crm_zen_user_id  + "\"\n"
 
 
 		log.Println(fmt.Sprintf("customer_id %s for payments_id %s had %s payment requests and exceeded the allowed limit --> %s", customers_id, payments_id, payment_requests_count, csvNameToWarn))
@@ -1022,7 +1031,8 @@ func main() {
 			crmAccounts.crm_name                             ,
 			crmAccounts.crm_email                            ,
 			crmAccounts.crm_premise_address                  ,
-			crmAccounts.crm_stage_name  
+			crmAccounts.crm_stage_name  			         ,
+			crmAccounts.crm_zen_user_id	
 		FROM       paymentsSuspended
 		INNER JOIN failedPaymentRequests 
 		ON         failedPaymentRequests.payments_id = paymentsSuspended.payments_id
@@ -1072,6 +1082,7 @@ func main() {
 		var crm_email              string
 		var crm_premise_address    string
 		var crm_stage_name         string
+		var crm_zen_user_id        string
 
 		rowSuspended.Scan(
 			&resource_type, 
@@ -1103,7 +1114,8 @@ func main() {
 			&crm_name,
 			&crm_email,
 			&crm_premise_address,
-			&crm_stage_name)
+			&crm_stage_name,
+		    &crm_zen_user_id )
 
 		resultText := 	"\"" + resource_type + "\"," +
 						"\"" + action + "\"," + 
@@ -1134,7 +1146,8 @@ func main() {
 						"\"" + crm_name + "\"," + 
 						"\"" + crm_email + "\"," + 
 						"\"" + crm_premise_address + "\"," + 
-						"\"" + crm_stage_name + "\"\n"
+						"\"" + crm_stage_name + "\"," + 
+						"\"" + crm_zen_user_id  + "\"\n"
 
 		paymentValue, err := strconv.ParseFloat(payments_amount, 64)
 		if paymentValue < amountToSwitch {
